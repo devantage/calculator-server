@@ -53,6 +53,7 @@ logs/
 # Coverage reports
 coverage.html
 coverage.out
+.gocache/
 
 # Claude Code settings
 .claude/

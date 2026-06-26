@@ -7,10 +7,35 @@ import (
 
 // MCP Protocol Types
 type MCPRequest struct {
-	JSONRPC string          `json:"jsonrpc"`
-	ID      interface{}     `json:"id"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
+	JSONRPC   string          `json:"jsonrpc"`
+	ID        interface{}     `json:"id"`
+	Method    string          `json:"method"`
+	Params    json.RawMessage `json:"params,omitempty"`
+	HasID     bool            `json:"-"`
+	HasMethod bool            `json:"-"`
+	HasResult bool            `json:"-"`
+	HasError  bool            `json:"-"`
+}
+
+func (r *MCPRequest) UnmarshalJSON(data []byte) error {
+	type mcpRequest MCPRequest
+
+	var raw map[string]json.RawMessage
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+
+	var decoded mcpRequest
+	if err := json.Unmarshal(data, &decoded); err != nil {
+		return err
+	}
+
+	_, decoded.HasID = raw["id"]
+	_, decoded.HasMethod = raw["method"]
+	_, decoded.HasResult = raw["result"]
+	_, decoded.HasError = raw["error"]
+	*r = MCPRequest(decoded)
+	return nil
 }
 
 type MCPResponse struct {
@@ -28,9 +53,10 @@ type MCPError struct {
 
 // Tool Types
 type Tool struct {
-	Name        string                 `json:"name"`
-	Description string                 `json:"description"`
-	InputSchema map[string]interface{} `json:"inputSchema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]interface{} `json:"inputSchema"`
+	OutputSchema map[string]interface{} `json:"outputSchema,omitempty"`
 }
 
 type ListToolsResult struct {
@@ -43,7 +69,9 @@ type CallToolParams struct {
 }
 
 type CallToolResult struct {
-	Content []ContentBlock `json:"content"`
+	Content           []ContentBlock `json:"content"`
+	StructuredContent interface{}    `json:"structuredContent,omitempty"`
+	IsError           bool           `json:"isError,omitempty"`
 }
 
 type ContentBlock struct {

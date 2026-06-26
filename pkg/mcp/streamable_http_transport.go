@@ -19,6 +19,8 @@ import (
 	"calculator-server/internal/types"
 )
 
+const fallbackProtocolVersion = "2025-03-26"
+
 // StreamableHTTPTransport implements MCP-compliant streamable HTTP transport
 // This transport provides:
 // - Single /mcp endpoint (per MCP specification)
@@ -107,12 +109,19 @@ func (t *StreamableHTTPTransport) corsMiddleware(handler http.Handler) http.Hand
 		// Apply CORS headers if enabled in configuration
 		if t.config.CORSEnabled {
 			origin := r.Header.Get("Origin")
-			// Only allow configured origins for security
-			if t.isOriginAllowed(origin) {
+			if origin != "" {
+				if !t.isOriginAllowed(origin) {
+					http.Error(w, "Origin not allowed", http.StatusForbidden)
+					return
+				}
+				if origin == "null" {
+					http.Error(w, "Origin not allowed", http.StatusForbidden)
+					return
+				}
 				w.Header().Set("Access-Control-Allow-Origin", origin)
 			}
 			// Set required CORS headers for MCP protocol
-			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
 			w.Header().Set("Access-Control-Allow-Headers", "Content-Type, Accept, MCP-Protocol-Version, Mcp-Session-Id")
 			w.Header().Set("Access-Control-Max-Age", "86400") // Cache preflight for 24 hours
 
@@ -154,11 +163,13 @@ func (t *StreamableHTTPTransport) handleHealthz(w http.ResponseWriter, r *http.R
 // This is the main entry point for all MCP protocol interactions
 // Supports both POST (JSON-RPC) and GET (SSE stream establishment) methods
 func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Request) {
-	// Step 1: Validate required MCP Protocol Version header
-	// This is mandatory per MCP specification
+	// Step 1: Validate negotiated MCP protocol version.
 	protocolVersion := r.Header.Get("MCP-Protocol-Version")
 	if protocolVersion == "" {
-		http.Error(w, "MCP-Protocol-Version header required", http.StatusBadRequest)
+		protocolVersion = fallbackProtocolVersion
+	}
+	if !IsSupportedProtocolVersion(protocolVersion) {
+		http.Error(w, "Unsupported MCP-Protocol-Version", http.StatusBadRequest)
 		return
 	}
 
@@ -183,8 +194,10 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 	case http.MethodGet:
 		// Handle SSE stream establishment
 		t.handleGET(w, r, sessionID)
+	case http.MethodDelete:
+		t.handleDELETE(w, sessionID)
 	default:
-		// Only POST and GET are supported per MCP specification
+		// Only POST, GET, and DELETE are supported by streamable HTTP.
 		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 	}
 }
@@ -194,10 +207,16 @@ func (t *StreamableHTTPTransport) handleMCP(w http.ResponseWriter, r *http.Reque
 // stream responses via Server-Sent Events if the client accepts it
 func (t *StreamableHTTPTransport) handlePOST(w http.ResponseWriter, r *http.Request, sessionID string) {
 	// Step 1: Validate Accept header per MCP specification
-	// Client must accept either JSON responses or SSE streaming
+	// Client must accept both JSON responses and SSE streaming.
 	accept := r.Header.Get("Accept")
-	if !strings.Contains(accept, "application/json") && !strings.Contains(accept, "text/event-stream") {
-		http.Error(w, "Accept header must include application/json or text/event-stream", http.StatusBadRequest)
+	if !strings.Contains(accept, "application/json") || !strings.Contains(accept, "text/event-stream") {
+		http.Error(w, "Accept header must include application/json and text/event-stream", http.StatusBadRequest)
+		return
+	}
+
+	contentType := r.Header.Get("Content-Type")
+	if !strings.Contains(contentType, "application/json") {
+		http.Error(w, "Content-Type must be application/json", http.StatusUnsupportedMediaType)
 		return
 	}
 
@@ -217,8 +236,35 @@ func (t *StreamableHTTPTransport) handlePOST(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
+	if IsNotification(mcpReq) && IsSupportedNotification(mcpReq) {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if IsJSONRPCResponse(mcpReq) {
+		w.WriteHeader(http.StatusAccepted)
+		return
+	}
+
+	if !mcpReq.HasMethod {
+		t.writeErrorResponse(w, mcpReq.ID, ErrorCodeInvalidRequest, "Invalid JSON-RPC request", "method is required")
+		return
+	}
+
+	if mcpReq.HasID && !HasValidRequestID(mcpReq) {
+		t.writeErrorResponse(w, mcpReq.ID, ErrorCodeInvalidRequest, "Invalid JSON-RPC request", "request id is required and cannot be null")
+		return
+	}
+
 	// Step 4: Process the request through the MCP server
 	response := t.mcpServer.HandleRequest(mcpReq)
+
+	if mcpReq.Method == "initialize" && response.Error == nil {
+		if sessionID == "" {
+			sessionID = t.createSession()
+		}
+		w.Header().Set("Mcp-Session-Id", sessionID)
+	}
 
 	// Step 5: Choose response format based on client preferences and request type
 	if strings.Contains(accept, "text/event-stream") && t.shouldStream(&mcpReq) {
@@ -251,10 +297,22 @@ func (t *StreamableHTTPTransport) handleGET(w http.ResponseWriter, r *http.Reque
 	t.setupSSEStream(w, r, sessionID)
 }
 
+func (t *StreamableHTTPTransport) handleDELETE(w http.ResponseWriter, sessionID string) {
+	if sessionID == "" {
+		http.Error(w, "Mcp-Session-Id header required", http.StatusBadRequest)
+		return
+	}
+
+	t.sessionsMux.Lock()
+	delete(t.sessions, sessionID)
+	t.sessionsMux.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+}
+
 // shouldStream determines if a request should use SSE streaming
 func (t *StreamableHTTPTransport) shouldStream(req *types.MCPRequest) bool {
-	// For now, we'll stream for tool calls that might take longer
-	return req.Method == "tools/call"
+	return false
 }
 
 // writeSSEResponse writes a response using Server-Sent Events

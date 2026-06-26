@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"strings"
 
 	"calculator-server/internal/types"
 )
 
 const (
+	ProtocolVersion = "2025-11-25"
+
 	// Standard JSON-RPC 2.0 error codes
 	ErrorCodeInvalidRequest = -32600
 	ErrorCodeMethodNotFound = -32601
@@ -62,6 +65,13 @@ const (
 	ErrorCodeDependencyFailure  = -3002
 )
 
+var supportedProtocolVersions = map[string]struct{}{
+	ProtocolVersion: {},
+	"2025-06-18":    {},
+	"2025-03-26":    {},
+	"2024-11-05":    {},
+}
+
 type Server struct {
 	tools   map[string]ToolHandler
 	schemas map[string]ToolSchema
@@ -107,6 +117,46 @@ func (s *Server) RegisterTool(name string, description string, inputSchema map[s
 	}
 }
 
+func IsNotification(req types.MCPRequest) bool {
+	return req.HasMethod && !req.HasID
+}
+
+func IsSupportedNotification(req types.MCPRequest) bool {
+	return strings.HasPrefix(req.Method, "notifications/")
+}
+
+func IsJSONRPCResponse(req types.MCPRequest) bool {
+	return !req.HasMethod && req.HasID && (req.HasResult || req.HasError)
+}
+
+func HasValidRequestID(req types.MCPRequest) bool {
+	return req.HasID && req.ID != nil
+}
+
+func IsSupportedProtocolVersion(version string) bool {
+	_, ok := supportedProtocolVersions[version]
+	return ok
+}
+
+func negotiateProtocolVersion(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ProtocolVersion
+	}
+
+	var initializeParams struct {
+		ProtocolVersion string `json:"protocolVersion"`
+	}
+	if err := json.Unmarshal(params, &initializeParams); err != nil {
+		return ProtocolVersion
+	}
+
+	if IsSupportedProtocolVersion(initializeParams.ProtocolVersion) {
+		return initializeParams.ProtocolVersion
+	}
+
+	return ProtocolVersion
+}
+
 func (s *Server) HandleRequest(req types.MCPRequest) types.MCPResponse {
 	response := types.MCPResponse{
 		JSONRPC: "2.0",
@@ -115,10 +165,13 @@ func (s *Server) HandleRequest(req types.MCPRequest) types.MCPResponse {
 
 	switch req.Method {
 	case "initialize":
+		protocolVersion := negotiateProtocolVersion(req.Params)
 		response.Result = map[string]interface{}{
-			"protocolVersion": "2024-11-05",
+			"protocolVersion": protocolVersion,
 			"capabilities": map[string]interface{}{
-				"tools": map[string]interface{}{},
+				"tools": map[string]interface{}{
+					"listChanged": false,
+				},
 			},
 			"serverInfo": map[string]interface{}{
 				"name":    "calculator-server",
@@ -159,10 +212,14 @@ func (s *Server) HandleRequest(req types.MCPRequest) types.MCPResponse {
 
 		result, err := handler(params.Arguments)
 		if err != nil {
-			response.Error = &types.MCPError{
-				Code:    ErrorCodeInternalError,
-				Message: "Tool execution failed",
-				Data:    err.Error(),
+			response.Result = types.CallToolResult{
+				Content: []types.ContentBlock{
+					{
+						Type: "text",
+						Text: err.Error(),
+					},
+				},
+				IsError: true,
 			}
 			return response
 		}
@@ -175,6 +232,7 @@ func (s *Server) HandleRequest(req types.MCPRequest) types.MCPResponse {
 					Text: string(resultJSON),
 				},
 			},
+			StructuredContent: result,
 		}
 	default:
 		response.Error = &types.MCPError{
@@ -224,6 +282,10 @@ func (st *StdioTransport) Start() error {
 				},
 			}
 			st.writeResponse(response)
+			continue
+		}
+
+		if IsNotification(req) && IsSupportedNotification(req) {
 			continue
 		}
 

@@ -24,7 +24,7 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 	cfg.Server.HTTP.Host = "localhost"
 	cfg.Server.HTTP.Port = 8084 // Use different port for test
 	cfg.Server.HTTP.CORS.Enabled = true
-	cfg.Server.HTTP.CORS.Origins = []string{"*"}
+	cfg.Server.HTTP.CORS.Origins = []string{"http://localhost:3000"}
 
 	// Create MCP server
 	server := mcp.NewServer()
@@ -59,10 +59,45 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 	time.Sleep(100 * time.Millisecond)
 
 	// Test MCP endpoint with basic requests
+	t.Run("MCP Initialize Negotiates 2025-11-25 and Creates Session", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"test-client","version":"1.0.0"}}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Initialize failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200, got %d", resp.StatusCode)
+		}
+		if resp.Header.Get("Mcp-Session-Id") == "" {
+			t.Error("Expected Mcp-Session-Id header on initialize response")
+		}
+
+		var response types.MCPResponse
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			t.Errorf("Failed to decode initialize response: %v", err)
+		}
+
+		result, ok := response.Result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("Expected initialize result object, got %T", response.Result)
+		}
+		if result["protocolVersion"] != "2025-11-25" {
+			t.Errorf("Expected protocolVersion 2025-11-25, got %v", result["protocolVersion"])
+		}
+	})
+
 	t.Run("MCP Tools List via HTTP POST", func(t *testing.T) {
 		mcpRequest := types.MCPRequest{
 			JSONRPC: "2.0",
 			ID:      1,
+			HasID:   true,
 			Method:  "tools/list",
 		}
 
@@ -71,7 +106,7 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 		client := &http.Client{Timeout: 5 * time.Second}
 		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), bytes.NewBuffer(requestBody))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
 		req.Header.Set("MCP-Protocol-Version", "2024-11-05")
 
 		resp, err := client.Do(req)
@@ -98,10 +133,81 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("MCP Initialized Notification via HTTP POST", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", "2024-11-05")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Initialized notification failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusAccepted {
+			t.Errorf("Expected status 202 for initialized notification, got %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Failed to read initialized notification response body: %v", err)
+		}
+		if len(body) != 0 {
+			t.Errorf("Expected empty initialized notification response body, got %q", string(body))
+		}
+	})
+
+	t.Run("MCP Method Without ID Returns JSON Response", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), strings.NewReader(`{"jsonrpc":"2.0","method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Tools list without ID failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200 for method without ID, got %d", resp.StatusCode)
+		}
+
+		var response types.MCPResponse
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			t.Errorf("Failed to decode tools/list response: %v", err)
+		}
+		if response.Result == nil {
+			t.Error("Expected result in tools/list response")
+		}
+	})
+
+	t.Run("MCP JSON-RPC Response via HTTP POST", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), strings.NewReader(`{"jsonrpc":"2.0","id":1,"result":{}}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("JSON-RPC response POST failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusAccepted {
+			t.Errorf("Expected status 202 for JSON-RPC response, got %d", resp.StatusCode)
+		}
+	})
+
 	t.Run("MCP Basic Math Call via HTTP POST", func(t *testing.T) {
 		mcpRequest := types.MCPRequest{
 			JSONRPC: "2.0",
 			ID:      1,
+			HasID:   true,
 			Method:  "tools/call",
 			Params:  json.RawMessage(`{"name":"basic_math","arguments":{"operation":"add","operands":[10,20,30],"precision":2}}`),
 		}
@@ -111,7 +217,7 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 		client := &http.Client{Timeout: 5 * time.Second}
 		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), bytes.NewBuffer(requestBody))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
 		req.Header.Set("MCP-Protocol-Version", "2024-11-05")
 
 		resp, err := client.Do(req)
@@ -157,6 +263,23 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 		allowOrigin := resp.Header.Get("Access-Control-Allow-Origin")
 		if allowOrigin == "" {
 			t.Error("Expected Access-Control-Allow-Origin header")
+		}
+	})
+
+	t.Run("CORS Rejects Invalid Origin", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("OPTIONS", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), nil)
+		req.Header.Set("Origin", "https://not-allowed.example")
+		req.Header.Set("Access-Control-Request-Method", "POST")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("CORS preflight failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("Expected status 403 for invalid origin, got %d", resp.StatusCode)
 		}
 	})
 
@@ -219,12 +342,31 @@ func TestMCPProtocolCompliance(t *testing.T) {
 
 	time.Sleep(100 * time.Millisecond)
 
-	t.Run("MCP Protocol Headers Required", func(t *testing.T) {
+	t.Run("MCP Protocol Header Falls Back To 2025-03-26", func(t *testing.T) {
 		client := &http.Client{Timeout: 5 * time.Second}
 
-		// Test missing MCP-Protocol-Version
 		req, _ := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d/mcp", config.Port), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
 		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected 200 for missing MCP-Protocol-Version fallback, got %d", resp.StatusCode)
+		}
+	})
+
+	t.Run("MCP Protocol Header Rejects Unsupported Version", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+
+		req, _ := http.NewRequest("POST", fmt.Sprintf("http://127.0.0.1:%d/mcp", config.Port), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"tools/list"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", "1900-01-01")
 
 		resp, err := client.Do(req)
 		if err != nil {
@@ -233,7 +375,7 @@ func TestMCPProtocolCompliance(t *testing.T) {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusBadRequest {
-			t.Errorf("Expected 400 for missing MCP-Protocol-Version, got %d", resp.StatusCode)
+			t.Errorf("Expected 400 for unsupported MCP-Protocol-Version, got %d", resp.StatusCode)
 		}
 	})
 
