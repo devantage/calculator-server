@@ -23,7 +23,7 @@ jobs:
 
       - id: build_image
         name: Build image
-        run: docker build . -f Dockerfile.api -t ${{ env.IMAGE_NAME }}
+        run: docker build . -t ${{ env.IMAGE_NAME }}
 
       - id: authenticate_on_registry
         name: Authenticate on registry
