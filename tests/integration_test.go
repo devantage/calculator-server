@@ -67,7 +67,7 @@ func TestIntegrationHTTPTransportWithConfig(t *testing.T) {
 		client := &http.Client{}
 		req, _ := http.NewRequest("POST", "http://localhost:8082/mcp", bytes.NewBuffer(requestBody))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
 		req.Header.Set("MCP-Protocol-Version", "2024-11-05")
 
 		resp, err := client.Do(req)
@@ -103,7 +103,7 @@ func TestIntegrationHTTPTransportWithConfig(t *testing.T) {
 		client := &http.Client{}
 		req, _ := http.NewRequest("POST", "http://localhost:8082/mcp", bytes.NewBuffer(requestBody))
 		req.Header.Set("Content-Type", "application/json")
-		req.Header.Set("Accept", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
 		req.Header.Set("MCP-Protocol-Version", "2024-11-05")
 
 		resp, err := client.Do(req)
