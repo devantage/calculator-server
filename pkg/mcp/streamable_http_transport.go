@@ -92,11 +92,11 @@ func NewStreamableHTTPTransport(mcpServer *Server, config *StreamableHTTPConfig)
 	return transport
 }
 
-// setupRoutes configures MCP-compliant HTTP routes
-// Per MCP specification, only a single endpoint is allowed for streamable HTTP transport
+// setupRoutes configures HTTP routes.
 func (t *StreamableHTTPTransport) setupRoutes(mux *http.ServeMux) {
 	// Single MCP endpoint as per specification - handles both POST (JSON-RPC) and GET (SSE)
 	mux.HandleFunc("/mcp", t.handleMCP)
+	mux.HandleFunc("/healthz", t.handleHealthz)
 }
 
 // corsMiddleware adds CORS headers if enabled
@@ -138,6 +138,16 @@ func (t *StreamableHTTPTransport) isOriginAllowed(origin string) bool {
 	}
 	// Origin not found in allowed list
 	return false
+}
+
+// handleHealthz reports process liveness without a response body.
+func (t *StreamableHTTPTransport) handleHealthz(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	w.WriteHeader(http.StatusOK)
 }
 
 // handleMCP handles MCP requests according to the streamable HTTP specification
