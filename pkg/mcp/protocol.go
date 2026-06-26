@@ -175,9 +175,11 @@ func (s *Server) HandleRequest(req types.MCPRequest) types.MCPResponse {
 			},
 			"serverInfo": map[string]interface{}{
 				"name":    "calculator-server",
-				"version": "1.0.0",
+				"version": "1.2.0",
 			},
 		}
+	case "ping":
+		response.Result = map[string]interface{}{}
 	case "tools/list":
 		tools := []types.Tool{}
 		for _, schema := range s.schemas {

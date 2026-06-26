@@ -133,6 +133,35 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("MCP Ping via HTTP POST", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), strings.NewReader(`{"jsonrpc":"2.0","id":1,"method":"ping"}`))
+		req.Header.Set("Content-Type", "application/json")
+		req.Header.Set("Accept", "application/json, text/event-stream")
+		req.Header.Set("MCP-Protocol-Version", "2025-11-25")
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Ping failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200 for ping, got %d", resp.StatusCode)
+		}
+
+		var response types.MCPResponse
+		if err := json.NewDecoder(resp.Body).Decode(&response); err != nil {
+			t.Errorf("Failed to decode ping response: %v", err)
+		}
+		if response.Error != nil {
+			t.Errorf("Unexpected error in ping response: %v", response.Error)
+		}
+		if response.Result == nil {
+			t.Error("Expected result in ping response")
+		}
+	})
+
 	t.Run("MCP Initialized Notification via HTTP POST", func(t *testing.T) {
 		client := &http.Client{Timeout: 5 * time.Second}
 		req, _ := http.NewRequest("POST", fmt.Sprintf("http://localhost:%d/mcp", cfg.Server.HTTP.Port), strings.NewReader(`{"jsonrpc":"2.0","method":"notifications/initialized"}`))
