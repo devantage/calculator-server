@@ -9,7 +9,7 @@ MAIN_PATH=./cmd/server
 BUILD_DIR=./dist
 COVERAGE_DIR=./coverage
 COVERAGE_FILE=$(COVERAGE_DIR)/coverage.out
-VERSION?=1.0.0
+VERSION?=1.1.0
 BUILD_TIME=$(shell date -u '+%Y-%m-%d_%H:%M:%S_UTC')
 COMMIT_HASH=$(shell git rev-parse --short HEAD 2>/dev/null || echo "unknown")
 
