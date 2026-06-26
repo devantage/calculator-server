@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -159,6 +160,30 @@ func TestStreamableHTTPTransportIntegrationWithConfig(t *testing.T) {
 		}
 	})
 
+	t.Run("Healthz", func(t *testing.T) {
+		client := &http.Client{Timeout: 5 * time.Second}
+		req, _ := http.NewRequest("GET", fmt.Sprintf("http://localhost:%d/healthz", cfg.Server.HTTP.Port), nil)
+
+		resp, err := client.Do(req)
+		if err != nil {
+			t.Fatalf("Healthz request failed: %v", err)
+		}
+		defer resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Errorf("Expected status 200 for healthz, got %d", resp.StatusCode)
+		}
+
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatalf("Failed to read healthz response body: %v", err)
+		}
+
+		if len(body) != 0 {
+			t.Errorf("Expected empty healthz response body, got %q", string(body))
+		}
+	})
+
 	// Graceful shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer shutdownCancel()
@@ -212,10 +237,10 @@ func TestMCPProtocolCompliance(t *testing.T) {
 		}
 	})
 
-	t.Run("Single MCP Endpoint Only", func(t *testing.T) {
+	t.Run("MCP Endpoint Isolation", func(t *testing.T) {
 		client := &http.Client{Timeout: 5 * time.Second}
 
-		// Test that non-MCP endpoints don't exist (MCP spec requires single endpoint)
+		// Test that unsupported non-MCP endpoints don't exist.
 		nonMCPEndpoints := []string{"/health", "/tools", "/metrics", "/status"}
 
 		for _, endpoint := range nonMCPEndpoints {
