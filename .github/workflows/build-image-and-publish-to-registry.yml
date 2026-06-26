@@ -32,7 +32,7 @@ jobs:
       - id: push_image_to_registry
         name: Push image to registry
         run: |
-          IMAGE_ID=${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}/api
+          IMAGE_ID=${{ env.REGISTRY }}/${{ env.IMAGE_ORG }}/${{ env.IMAGE_NAME }}
 
           # Changes all uppercase to lowercase
           IMAGE_ID=$(echo $IMAGE_ID | tr '[A-Z]' '[a-z]')
